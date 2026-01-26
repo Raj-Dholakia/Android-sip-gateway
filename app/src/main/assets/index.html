@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gateway Configuration</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>Gateway Configuration</h1>
+
+    <form id="configForm">
+        <div class="section">
+            <h2>SIP Settings</h2>
+            <div class="row">
+                <div class="field">
+                    <label for="sip_server">Server</label>
+                    <input type="text" id="sip_server" name="sip_server" placeholder="192.168.1.1">
+                </div>
+                <div class="field" style="flex: 0.4;">
+                    <label for="sip_port">Port</label>
+                    <input type="number" id="sip_port" name="sip_port" value="5060">
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label for="sip_user">Username</label>
+                    <input type="text" id="sip_user" name="sip_user">
+                </div>
+                <div class="field">
+                    <label for="sip_password">Password</label>
+                    <div class="password-wrapper">
+                        <input type="password" id="sip_password" name="sip_password">
+                        <span id="togglePwd" class="toggle-pwd">&#128065;</span>
+                    </div>
+                </div>
+            </div>
+            <div class="field checkbox">
+                <input type="checkbox" id="use_tls" name="use_tls">
+                <label for="use_tls">Use TLS (port 5061)</label>
+            </div>
+            <div class="field">
+                <label for="sip_realm">Realm (leave empty for any)</label>
+                <input type="text" id="sip_realm" name="sip_realm" placeholder="asterisk">
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>SIM Routing</h2>
+            <div class="row">
+                <div class="field">
+                    <label for="sim1_destination">SIM1 Destination (ext)</label>
+                    <input type="text" id="sim1_destination" name="sim1_destination" placeholder="101">
+                </div>
+                <div class="field">
+                    <label for="sim2_destination">SIM2 Destination (ext)</label>
+                    <input type="text" id="sim2_destination" name="sim2_destination" placeholder="102">
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Audio Settings</h2>
+            <div class="row">
+                <div class="field">
+                    <label for="audio_card">Sound Card</label>
+                    <input type="number" id="audio_card" name="audio_card" value="0">
+                </div>
+                <div class="field">
+                    <label for="audio_route">Multimedia Route</label>
+                    <input type="text" id="audio_route" name="audio_route" placeholder="MultiMedia1">
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label for="tx_gain">TX Gain dB (GSM&rarr;SIP)</label>
+                    <input type="number" id="tx_gain" name="tx_gain" value="0" step="1" min="-20" max="10">
+                </div>
+                <div class="field">
+                    <label for="rx_gain">RX Gain dB (SIP&rarr;GSM)</label>
+                    <input type="number" id="rx_gain" name="rx_gain" value="0" step="1" min="-20" max="10">
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Device Mute Preset</h2>
+            <div class="field">
+                <label for="mute_preset">Preset</label>
+                <select id="mute_preset" name="mute_preset">
+                    <option value="redmi_note_7">Redmi Note 7 (SDM660)</option>
+                    <option value="generic">Generic (SDM4xx)</option>
+                    <option value="redmi_4x">Redmi 4X (SD435)</option>
+                    <option value="custom">Custom</option>
+                </select>
+            </div>
+            <div id="customMuteSection" style="display: none;">
+                <div class="field">
+                    <label>Detected Controls</label>
+                    <div id="detectedControls" class="checkbox-group">
+                        <small>Loading controls...</small>
+                    </div>
+                    <button type="button" id="refreshControlsBtn" class="secondary">Refresh</button>
+                </div>
+                <div class="field">
+                    <label for="manual_mute_controls">Manual Mute Controls (comma-separated)</label>
+                    <input type="text" id="manual_mute_controls" name="manual_mute_controls"
+                           placeholder="e.g. DEC1 Volume, EAR_S, ADC1 MUX">
+                    <small>Use "Volume" suffix for INT controls (→0), others are ENUM (→ZERO)</small>
+                </div>
+            </div>
+        </div>
+
+        <button type="submit" id="applyBtn">Apply</button>
+        <button type="button" id="disableBtn" class="danger">Disable Web Interface</button>
+        <div id="status"></div>
+    </form>
+
+    <script src="config.js"></script>
+</body>
+</html>

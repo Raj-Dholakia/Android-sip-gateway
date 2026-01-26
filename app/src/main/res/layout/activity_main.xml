@@ -1,0 +1,480 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:focusable="true"
+        android:focusableInTouchMode="true">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="GSM-SIP Gateway"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Status -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Status:"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Not started"
+            android:background="#f0f0f0"
+            android:padding="8dp"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Permissions Status -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Permissions (via root):"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:id="@+id/permissionsText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Checking..."
+            android:background="#f0f0f0"
+            android:padding="8dp"
+            android:fontFamily="monospace"
+            android:textSize="10sp"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- SIP Configuration -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SIP Configuration:"
+            android:textStyle="bold"/>
+
+        <EditText
+            android:id="@+id/sipServer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SIP Server"
+            android:inputType="text"/>
+
+        <EditText
+            android:id="@+id/sipPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SIP Port"
+            android:inputType="number"/>
+
+        <EditText
+            android:id="@+id/sipUser"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SIP Username"
+            android:inputType="text"/>
+
+        <EditText
+            android:id="@+id/sipPassword"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SIP Password"
+            android:inputType="textPassword"/>
+
+        <CheckBox
+            android:id="@+id/useTls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Use TLS (port 5061)"
+            android:layout_marginTop="4dp"/>
+
+        <EditText
+            android:id="@+id/sipRealm"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SIP Realm (empty = any)"
+            android:inputType="text"/>
+
+        <!-- Incoming GSM calls/SMS destination per SIM -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Incoming GSM → SIP routing:"
+            android:layout_marginTop="8dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/sim1Destination"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="SIM1 → ext"
+                android:inputType="text"/>
+
+            <EditText
+                android:id="@+id/sim2Destination"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="SIM2 → ext"
+                android:inputType="text"
+                android:layout_marginStart="8dp"/>
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Leave SIM2 empty if single-SIM phone"
+            android:textSize="11sp"
+            android:textColor="#666666"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Incoming Call Mode -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Incoming call mode:"
+            android:layout_marginTop="8dp"/>
+
+        <RadioGroup
+            android:id="@+id/incomingModeRadioGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp">
+
+            <RadioButton
+                android:id="@+id/modeSipFirst"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Start SIP → Answer GSM when connected (30s timeout)"
+                android:textSize="13sp"/>
+
+            <RadioButton
+                android:id="@+id/modeAnswerFirst"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Answer GSM → Start SIP (30s timeout)"
+                android:textSize="13sp"/>
+        </RadioGroup>
+
+        <!-- Control Buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <Button
+                android:id="@+id/saveButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Save Settings"/>
+
+            <Button
+                android:id="@+id/connectButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Connect"/>
+
+            <Button
+                android:id="@+id/disconnectButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Disconnect"/>
+        </LinearLayout>
+
+        <!-- Battery Charge Limit -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Battery Charge Limit:"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Stop charging at specified level (requires root)"
+            android:textSize="11sp"
+            android:textColor="#666666"
+            android:layout_marginBottom="4dp"/>
+
+        <RadioGroup
+            android:id="@+id/batteryLimitRadioGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <RadioButton
+                android:id="@+id/limit60"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="60%"/>
+
+            <RadioButton
+                android:id="@+id/limit100"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="100% (no limit)"/>
+        </RadioGroup>
+
+        <!-- Audio Configuration -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Audio Configuration:"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Qualcomm: capture=VOC_REC, playback=Incall_Music"
+            android:textSize="11sp"
+            android:textColor="#666666"
+            android:layout_marginBottom="4dp"/>
+
+        <!-- Sound Card -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sound Card:"/>
+
+        <Spinner
+            android:id="@+id/cardSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:spinnerMode="dialog"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Capture Device -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Capture Device (GSM→SIP):"/>
+
+        <Spinner
+            android:id="@+id/captureSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:spinnerMode="dialog"
+            android:prompt="@string/select_capture"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Playback Device -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Playback Device (SIP→GSM):"/>
+
+        <Spinner
+            android:id="@+id/playbackSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:spinnerMode="dialog"
+            android:prompt="@string/select_playback"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Mixer Route -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Mixer Route:"/>
+
+        <Spinner
+            android:id="@+id/mixerRouteSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:spinnerMode="dialog"
+            android:prompt="@string/select_mixer"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Audio Gain -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Audio Gain (dB):"
+            android:textStyle="bold"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:layout_marginEnd="8dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="TX (GSM→SIP)"/>
+
+                <EditText
+                    android:id="@+id/txGainEdit"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="numberDecimal|numberSigned"
+                    android:hint="-6"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="RX (SIP→GSM)"/>
+
+                <EditText
+                    android:id="@+id/rxGainEdit"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="numberDecimal|numberSigned"
+                    android:hint="0"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Device Mute Preset -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Device Mute Preset:"
+            android:textStyle="bold"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Mutes speaker/mic on gateway during calls (enforced every 3s)"
+            android:textSize="11sp"
+            android:textColor="#666666"
+            android:layout_marginBottom="4dp"/>
+
+        <Spinner
+            android:id="@+id/devicePresetSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:spinnerMode="dropdown"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Custom controls (visible only when Custom preset selected) -->
+        <LinearLayout
+            android:id="@+id/customMuteContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Detected mixer controls (tap to toggle):"
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="4dp"/>
+
+            <LinearLayout
+                android:id="@+id/micMuteCheckboxContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Manual controls (comma-separated, for controls not in list):"
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="4dp"/>
+
+            <EditText
+                android:id="@+id/manualMuteControls"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="e.g. DEC1 Volume, EAR_S, ADC1 MUX"
+                android:inputType="text"
+                android:textSize="13sp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Use 'Volume' suffix for INT controls (→0), others are ENUM (→ZERO)"
+                android:textSize="10sp"
+                android:textColor="#999999"/>
+
+        </LinearLayout>
+
+        <!-- Save / Restart buttons at bottom -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="16dp">
+
+            <Button
+                android:id="@+id/saveAudioButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Save Audio"/>
+
+            <Button
+                android:id="@+id/restartButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Restart"/>
+        </LinearLayout>
+
+        <!-- Web Interface Toggle -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
+
+            <Switch
+                android:id="@+id/webInterfaceSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+
+            <TextView
+                android:id="@+id/webInterfaceLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Web Interface (port 8080)"
+                android:layout_marginStart="8dp"/>
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

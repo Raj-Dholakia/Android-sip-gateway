@@ -1,0 +1,33 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+/app/build
+
+# Release signing (DO NOT commit!)
+keystore.properties
+release-keystore.jks
+*.jks
+*.keystore
+
+# Release build outputs
+release-output/
+*.apk.sha256
+app/build.gradle.backup
+crash.log
+*.log
+*.jpg
+*.png
+
+# FreeSWITCH configs (not for public repo)
+freeswitch-config/
+freeswitch-lxc/
+
+# Documentation (keep only README.md)
+*.md
+!README.md

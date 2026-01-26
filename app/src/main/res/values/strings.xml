@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GSM-SIP Gateway</string>
+    <string name="select_capture">Select Capture Device (GSM→SIP)</string>
+    <string name="select_playback">Select Playback Device (SIP→GSM)</string>
+    <string name="select_mixer">Select Mixer Route</string>
+</resources>

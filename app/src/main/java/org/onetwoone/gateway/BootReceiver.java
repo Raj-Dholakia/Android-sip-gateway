@@ -1,0 +1,78 @@
+package org.onetwoone.gateway;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.util.Log;
+
+/**
+ * Автозапуск GSM-SIP шлюза при загрузке системы
+ *
+ * Запускается автоматически после BOOT_COMPLETED
+ * Гарантирует что шлюз работает всегда после перезагрузки устройства
+ */
+public class BootReceiver extends BroadcastReceiver {
+    private static final String TAG = "GatewayBoot";
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
+            Log.i(TAG, "Boot completed, starting gateway services");
+
+            // Start SIP service
+            Intent serviceIntent = new Intent(context, PjsipSipService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+            Log.i(TAG, "SIP service started");
+
+            // Start Battery Limit service with saved limit
+            SharedPreferences prefs = context.getSharedPreferences("gateway_prefs", Context.MODE_PRIVATE);
+            int batteryLimit = prefs.getInt("battery_limit", 60);
+            Intent batteryIntent = new Intent(context, BatteryLimitService.class);
+            batteryIntent.putExtra("limit", batteryLimit);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(batteryIntent);
+            } else {
+                context.startService(batteryIntent);
+            }
+            Log.i(TAG, "Battery limit service started (limit: " + batteryLimit + "%)");
+
+            // Schedule battery watchdog (runs independently, survives service crashes)
+            BatteryWatchdog.schedule(context);
+            Log.i(TAG, "Battery watchdog scheduled");
+
+            // Start MainActivity via full-screen intent (required for Android 10+)
+            launchMainActivity(context);
+            Log.i(TAG, "MainActivity launch requested");
+        }
+    }
+
+    private void launchMainActivity(Context context) {
+        // Use root to start activity (bypasses Android 10+ background restrictions)
+        new Thread(() -> {
+            try {
+                Thread.sleep(2000); // Wait for system to settle
+                Process p = Runtime.getRuntime().exec(new String[]{
+                    "su", "-c", "am start -n org.onetwoone.gateway/.MainActivity"
+                });
+                p.waitFor();
+                Log.i(TAG, "MainActivity started via root");
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to start MainActivity: " + e.getMessage());
+                // Fallback: try normal start
+                try {
+                    Intent activityIntent = new Intent(context, MainActivity.class);
+                    activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(activityIntent);
+                } catch (Exception e2) {
+                    Log.e(TAG, "Fallback also failed: " + e2.getMessage());
+                }
+            }
+        }).start();
+    }
+}

@@ -1,0 +1,376 @@
+package org.onetwoone.gateway;
+
+import android.content.Context;
+import android.content.Intent;
+import android.media.AudioManager;
+
+import org.onetwoone.gateway.config.GatewayConfig;
+import android.os.Build;
+import android.os.Handler;
+import android.telecom.Call;
+import android.telecom.InCallService;
+import android.telecom.PhoneAccountHandle;
+import android.telecom.VideoProfile;
+import android.telephony.SubscriptionInfo;
+import android.telephony.SubscriptionManager;
+import android.util.Log;
+
+/**
+ * InCallService that receives GSM call events.
+ * This service is activated when device receives/makes GSM calls.
+ */
+public class GatewayInCallService extends InCallService {
+    private static final String TAG = "GatewayInCall";
+
+    // Incoming call modes (0=SIP_FIRST is default)
+    public static final int MODE_SIP_FIRST = 0;     // Start SIP first, answer GSM when SIP connects (default)
+    public static final int MODE_ANSWER_FIRST = 1;  // Answer GSM first, then start SIP
+    private static final int INCOMING_TIMEOUT_MS = 30000;  // 30 seconds
+
+    private static GatewayInCallService instance;
+    private Call currentCall;
+    private Handler timeoutHandler = new Handler();
+    private Runnable timeoutRunnable;
+
+    private Call.Callback callCallback = new Call.Callback() {
+        @Override
+        public void onStateChanged(Call call, int state) {
+            Log.d(TAG, "Call state changed: " + stateToString(state));
+
+            // NOTE: Don't mute microphone - it breaks SIP→GSM audio path!
+            // The Incall_Music injection uses the same audio path as microphone.
+
+            // Notify PjsipSipService about GSM call state
+            PjsipSipService sipService = PjsipSipService.getInstance();
+            if (sipService != null) {
+                sipService.onGsmCallStateChanged(call, state);
+            }
+        }
+
+        @Override
+        public void onDetailsChanged(Call call, Call.Details details) {
+            Log.d(TAG, "Call details changed: " + details.getHandle());
+        }
+    };
+
+    public static GatewayInCallService getInstance() {
+        return instance;
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        instance = this;
+        Log.d(TAG, "InCallService created");
+
+        // Ensure SIP service is running
+        if (PjsipSipService.getInstance() == null) {
+            Log.w(TAG, "SIP service not running, starting it...");
+            Intent intent = new Intent(this, PjsipSipService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        instance = null;
+        Log.d(TAG, "InCallService destroyed");
+    }
+
+    @Override
+    public void onCallAdded(Call call) {
+        super.onCallAdded(call);
+        currentCall = call;
+        call.registerCallback(callCallback);
+
+        Log.d(TAG, "========== onCallAdded START (Android " + Build.VERSION.SDK_INT + ") ==========");
+        Log.d(TAG, "Call state: " + stateToString(call.getState()));
+
+        String number = "unknown";
+        if (call.getDetails() != null && call.getDetails().getHandle() != null) {
+            number = call.getDetails().getHandle().getSchemeSpecificPart();
+        }
+
+        boolean isIncoming = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            int dir = call.getDetails().getCallDirection();
+            isIncoming = (dir == Call.Details.DIRECTION_INCOMING);
+            Log.d(TAG, "Direction from API: " + dir + " (1=INCOMING, 2=OUTGOING)");
+        } else {
+            // On older APIs, determine by call state
+            isIncoming = (call.getState() == Call.STATE_RINGING);
+            Log.d(TAG, "Direction from state: " + (isIncoming ? "INCOMING" : "OUTGOING"));
+        }
+
+        // Detect SIM slot (1 or 2) from PhoneAccountHandle
+        int simSlot = getSimSlotFromCall(call);
+        Log.d(TAG, "SIM slot: " + simSlot);
+
+        String direction = isIncoming ? "INCOMING" : "OUTGOING";
+        Log.d(TAG, "Call added: " + number + ", direction: " + direction);
+        Log.d(TAG, "========== onCallAdded END ==========");
+
+        // Handle incoming GSM call
+        if (isIncoming) {
+            handleIncomingGsmCall(call, number, simSlot);
+        }
+    }
+
+    /**
+     * Detect SIM slot number (1 or 2) from call's PhoneAccountHandle
+     * Returns 0 if unable to determine (single-SIM or error)
+     */
+    private int getSimSlotFromCall(Call call) {
+        try {
+            if (call.getDetails() == null || call.getDetails().getAccountHandle() == null) {
+                return 0;
+            }
+
+            android.telecom.PhoneAccountHandle accountHandle = call.getDetails().getAccountHandle();
+            String accountId = accountHandle.getId();
+
+            Log.d(TAG, "PhoneAccountHandle ID: " + accountId);
+
+            // Try to parse slot from account ID
+            // Common formats: "0", "1", "89XXXXXXXXXXXXXXXXX" (ICCID with slot prefix)
+            // Or use SubscriptionManager to map account to slot
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.telephony.SubscriptionManager subManager =
+                    (android.telephony.SubscriptionManager) getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+
+                if (subManager != null) {
+                    java.util.List<android.telephony.SubscriptionInfo> subList =
+                        subManager.getActiveSubscriptionInfoList();
+
+                    if (subList != null) {
+                        for (android.telephony.SubscriptionInfo info : subList) {
+                            // Check if this subscription matches the account
+                            String iccId = info.getIccId();
+                            if (accountId.contains(iccId) || accountId.equals(String.valueOf(info.getSubscriptionId()))) {
+                                int slot = info.getSimSlotIndex();
+                                Log.d(TAG, "Matched subscription: slot=" + slot + ", iccId=" + iccId);
+                                return slot + 1;  // Return 1-based slot (1 or 2)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback: try to parse slot directly from ID if it's "0" or "1"
+            if (accountId.length() == 1 && Character.isDigit(accountId.charAt(0))) {
+                int slot = Integer.parseInt(accountId);
+                return slot + 1;  // Return 1-based
+            }
+
+            Log.w(TAG, "Unable to determine SIM slot from account: " + accountId);
+            return 0;  // Unknown
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error detecting SIM slot: " + e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Handle incoming GSM call based on configured mode:
+     * MODE_ANSWER_FIRST: Answer GSM → Start SIP → Timeout 30s
+     * MODE_SIP_FIRST: Start SIP → Answer GSM when SIP connects → Timeout 30s
+     */
+    private void handleIncomingGsmCall(Call call, String callerNumber, int simSlot) {
+        Log.d(TAG, "Incoming GSM call from: " + callerNumber);
+
+        // Get incoming call mode from config
+        GatewayConfig.init(this);
+        int mode = GatewayConfig.getInstance().getIncomingCallMode();
+        Log.d(TAG, "Incoming call mode: " + (mode == MODE_SIP_FIRST ? "SIP_FIRST (default)" : "ANSWER_FIRST"));
+
+        // Setup timeout handler - hangup both calls if not connected within 30s
+        setupIncomingTimeout();
+
+        if (mode == MODE_ANSWER_FIRST) {
+            // Answer GSM first, then start SIP
+            Log.d(TAG, "Mode ANSWER_FIRST: Answering GSM first (Android " + Build.VERSION.SDK_INT + ")");
+            try {
+                call.answer(VideoProfile.STATE_AUDIO_ONLY);
+                Log.d(TAG, "GSM call answered successfully");
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to answer GSM call: " + e.getMessage(), e);
+                cancelIncomingTimeout();
+                return;
+            }
+
+            // Make SIP call to configured destination with CallerID
+            makeSipCallWithRetry(callerNumber, simSlot, 0);
+
+        } else {
+            // SIP first (default): Start SIP, answer GSM when SIP connects
+            Log.d(TAG, "Mode SIP_FIRST: Starting SIP first, will answer GSM when SIP connects");
+
+            // Make SIP call first (don't answer GSM yet)
+            makeSipCallWithRetry(callerNumber, simSlot, 0);
+
+            // GSM will be answered from PjsipSipService when SIP connects
+        }
+    }
+
+    /**
+     * Setup timeout for incoming call - hangup both GSM and SIP if not connected within 30s
+     */
+    private void setupIncomingTimeout() {
+        cancelIncomingTimeout();  // Cancel any existing timeout
+
+        timeoutRunnable = new Runnable() {
+            @Override
+            public void run() {
+                Log.w(TAG, "Incoming call timeout (30s) - hanging up both GSM and SIP");
+
+                // Hangup GSM call
+                if (currentCall != null) {
+                    try {
+                        currentCall.disconnect();
+                        Log.d(TAG, "GSM call disconnected due to timeout");
+                    } catch (Exception e) {
+                        Log.e(TAG, "Failed to disconnect GSM on timeout: " + e.getMessage());
+                    }
+                }
+
+                // Hangup SIP call
+                PjsipSipService sipService = PjsipSipService.getInstance();
+                if (sipService != null) {
+                    sipService.hangupCall();
+                    Log.d(TAG, "SIP call disconnected due to timeout");
+                }
+            }
+        };
+
+        timeoutHandler.postDelayed(timeoutRunnable, INCOMING_TIMEOUT_MS);
+        Log.d(TAG, "Incoming timeout set: 30 seconds");
+    }
+
+    /**
+     * Cancel incoming call timeout (called when bridge is successfully established)
+     */
+    public void cancelIncomingTimeout() {
+        if (timeoutRunnable != null) {
+            timeoutHandler.removeCallbacks(timeoutRunnable);
+            timeoutRunnable = null;
+            Log.d(TAG, "Incoming timeout cancelled");
+        }
+    }
+
+    private void makeSipCallWithRetry(String callerNumber, int simSlot, int attempt) {
+        // Check if GSM call is still active
+        if (currentCall == null) {
+            Log.w(TAG, "GSM call ended, stopping SIP retry");
+            cancelIncomingTimeout();
+            return;
+        }
+
+        PjsipSipService sipService = PjsipSipService.getInstance();
+        if (sipService != null && sipService.isSipRegistered()) {
+            sipService.onIncomingGsmCall(callerNumber, simSlot);
+        } else {
+            // Retry every 500ms until GSM call ends
+            Log.w(TAG, "SIP service not ready, retry " + (attempt + 1) + " in 500ms");
+            new android.os.Handler().postDelayed(() -> {
+                makeSipCallWithRetry(callerNumber, simSlot, attempt + 1);
+            }, 500);
+        }
+    }
+
+    @Override
+    public void onCallRemoved(Call call) {
+        super.onCallRemoved(call);
+        call.unregisterCallback(callCallback);
+
+        Log.d(TAG, "Call removed");
+
+        // Cancel timeout when call is removed
+        cancelIncomingTimeout();
+
+        if (call == currentCall) {
+            currentCall = null;
+        }
+    }
+
+    public Call getCurrentCall() {
+        return currentCall;
+    }
+
+    public void answerCall() {
+        if (currentCall != null) {
+            Log.d(TAG, "Answering call");
+            try {
+                // Android 10+ requires VideoProfile
+                currentCall.answer(VideoProfile.STATE_AUDIO_ONLY);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to answer call: " + e.getMessage());
+            }
+        }
+    }
+
+    public void rejectCall() {
+        if (currentCall != null) {
+            Log.d(TAG, "Rejecting call");
+            currentCall.reject(false, null);
+        }
+    }
+
+    public void disconnectCall() {
+        if (currentCall != null) {
+            int state = currentCall.getState();
+            Log.d(TAG, "Disconnecting GSM call (state: " + stateToString(state) + ")");
+
+            try {
+                // Only disconnect if call is not already disconnected/disconnecting
+                if (state != Call.STATE_DISCONNECTED && state != Call.STATE_DISCONNECTING) {
+                    currentCall.disconnect();
+                    Log.d(TAG, "GSM call disconnect() called");
+                } else {
+                    Log.d(TAG, "GSM call already disconnecting/disconnected, skipping");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to disconnect GSM call: " + e.getMessage(), e);
+            }
+        } else {
+            Log.d(TAG, "No current GSM call to disconnect");
+        }
+    }
+
+    private String stateToString(int state) {
+        switch (state) {
+            case Call.STATE_NEW: return "NEW";
+            case Call.STATE_DIALING: return "DIALING";
+            case Call.STATE_RINGING: return "RINGING";
+            case Call.STATE_HOLDING: return "HOLDING";
+            case Call.STATE_ACTIVE: return "ACTIVE";
+            case Call.STATE_DISCONNECTED: return "DISCONNECTED";
+            case Call.STATE_CONNECTING: return "CONNECTING";
+            case Call.STATE_DISCONNECTING: return "DISCONNECTING";
+            case Call.STATE_SELECT_PHONE_ACCOUNT: return "SELECT_PHONE_ACCOUNT";
+            default: return "UNKNOWN(" + state + ")";
+        }
+    }
+
+    /**
+     * Mute/unmute device microphone.
+     * We mute during GSM calls to prevent local sounds from being picked up.
+     */
+    private void setMicrophoneMute(boolean mute) {
+        try {
+            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (audioManager != null) {
+                audioManager.setMicrophoneMute(mute);
+                Log.d(TAG, "Microphone mute: " + mute);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to set microphone mute: " + e.getMessage());
+        }
+    }
+}
