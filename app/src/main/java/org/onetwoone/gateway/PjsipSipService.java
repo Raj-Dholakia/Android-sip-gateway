@@ -271,10 +271,14 @@ public class PjsipSipService extends Service implements SipCallService {
         Log.d(TAG, "Attempting reconnect...");
 
         try {
-            if (accountManager.getAccount() == null) {
-                accountManager.createAccount(this);
+            // Check if endpoint is properly initialized (has transport)
+            // CRITICAL: Must check hasTransport() - creating account without transport causes PJSIP crash
+            if (!endpointManager.isInitialized() || !endpointManager.hasTransport() || accountManager.getAccount() == null) {
+                // Endpoint not ready, transport missing, or account missing - need full init
+                Log.d(TAG, "Endpoint/transport/account not ready, performing full initialization");
+                initializeSip();
             } else {
-                // Re-register
+                // Endpoint and transport ready, just re-register
                 accountManager.getAccount().setRegistration(true);
             }
         } catch (Exception e) {
@@ -525,12 +529,8 @@ public class PjsipSipService extends Service implements SipCallService {
             prm.setContent(body);
             prm.setContentType("text/plain");
 
-            // Set From to show GSM sender number
+            // Add X-GSM-CallerID header (like calls) - don't override From URI
             SipTxOption txOpt = prm.getTxOption();
-            String fromUri = "\"" + gsmSender + "\" <sip:" + gsmSender + "@" + server + ">";
-            txOpt.setLocalUri(fromUri);
-
-            // Add headers
             SipHeaderVector headers = txOpt.getHeaders();
 
             SipHeader callerHeader = new SipHeader();

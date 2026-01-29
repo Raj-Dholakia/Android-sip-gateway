@@ -31,3 +31,5 @@ freeswitch-lxc/
 # Documentation (keep only README.md)
 *.md
 !README.md
+openvpn_configs
+wireguard/

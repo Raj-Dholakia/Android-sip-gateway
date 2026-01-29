@@ -1,0 +1,25 @@
+# Crontab entries for Asterisk GSM-SIP Gateway
+# Add these to root crontab: crontab -e
+
+# Update TLS certificates from Caddy server daily at 3 AM
+0 3 * * * /usr/local/bin/update-certs.sh
+
+# Retry failed message deliveries every 10 seconds (6 times per minute)
+* * * * * /usr/local/bin/retry-failed-messages.py >> /var/log/asterisk/message-retry.log 2>&1
+* * * * * sleep 10; /usr/local/bin/retry-failed-messages.py >> /var/log/asterisk/message-retry.log 2>&1
+* * * * * sleep 20; /usr/local/bin/retry-failed-messages.py >> /var/log/asterisk/message-retry.log 2>&1
+* * * * * sleep 30; /usr/local/bin/retry-failed-messages.py >> /var/log/asterisk/message-retry.log 2>&1
+* * * * * sleep 40; /usr/local/bin/retry-failed-messages.py >> /var/log/asterisk/message-retry.log 2>&1
+* * * * * sleep 50; /usr/local/bin/retry-failed-messages.py >> /var/log/asterisk/message-retry.log 2>&1
+
+# Optional: Cleanup old events from database (older than 90 days) weekly on Sunday at 4 AM
+# 0 4 * * 0 python3 -c "import sqlite3; conn = sqlite3.connect('/var/lib/asterisk/gateway_events.db'); conn.execute('DELETE FROM events WHERE timestamp < datetime(\"now\", \"-90 days\")'); conn.commit()"
+
+# Optional: Restart Asterisk weekly to clear any memory leaks (Sunday at 5 AM)
+# 0 5 * * 0 systemctl restart asterisk
+
+# Optional: Daily database vacuum to optimize performance (at 4:30 AM)
+# 30 4 * * * sqlite3 /var/lib/asterisk/gateway_events.db "VACUUM"
+
+# Optional: Generate daily statistics report
+# 0 6 * * * /usr/local/bin/generate-daily-stats.sh

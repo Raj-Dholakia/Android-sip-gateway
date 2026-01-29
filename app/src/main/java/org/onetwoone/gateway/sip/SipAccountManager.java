@@ -75,6 +75,12 @@ public class SipAccountManager {
             throw new IllegalStateException("Endpoint not created");
         }
 
+        // CRITICAL: Check that transport exists before creating account
+        // PJSIP crashes with assertion failure if account is created without transport
+        if (!endpointManager.hasTransport()) {
+            throw new IllegalStateException("No transport available - cannot create account");
+        }
+
         String server = config.getSipServer();
         String user = config.getSipUser();
         String password = config.getSipPassword();

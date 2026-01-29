@@ -70,6 +70,28 @@ public class SipEndpointManager {
     }
 
     /**
+     * Check if endpoint has at least one transport created.
+     * This is critical before creating accounts - PJSIP will crash if account is created without transport.
+     */
+    public boolean hasTransport() {
+        if (endpoint == null) {
+            return false;
+        }
+        try {
+            // Use transportEnum() to get list of transport IDs
+            IntVector transports = endpoint.transportEnum();
+            boolean hasTransports = transports != null && transports.size() > 0;
+            if (transports != null) {
+                transports.delete();
+            }
+            return hasTransports;
+        } catch (Exception e) {
+            Log.w(TAG, "Error checking transport: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Check if TLS setting changed and endpoint needs recreation.
      */
     public boolean needsRecreation() {
@@ -112,6 +134,15 @@ public class SipEndpointManager {
                 throw new TlsChangedException(endpointUseTls, useTls);
             } else {
                 Log.d(TAG, "Reusing existing endpoint");
+
+                // CRITICAL: Check if transport exists when reusing endpoint
+                // If transport is missing (e.g. after previous creation failure), recreate it
+                if (!hasTransport()) {
+                    Log.w(TAG, "Endpoint exists but has no transport - recreating transport");
+                    createTransport(useTls);
+                    Log.d(TAG, "Transport recreated successfully");
+                }
+
                 return;
             }
         }
