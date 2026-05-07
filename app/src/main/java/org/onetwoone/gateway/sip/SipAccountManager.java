@@ -120,13 +120,13 @@ public class SipAccountManager {
         natConfig.setIceEnabled(false);
         natConfig.setSdpNatRewriteUse(1);
         natConfig.setViaRewriteUse(1);
-        natConfig.setSipOutboundUse(1);
+        natConfig.setSipOutboundUse(0); // Disable outbound — Asterisk chan_sip doesn't support it
 
-        // Media config - SRTP mandatory
+        // Media config - SRTP disabled for plain UDP Asterisk
         AccountMediaConfig mediaConfig = accConfig.getMediaConfig();
-        mediaConfig.setSrtpUse(pjmedia_srtp_use.PJMEDIA_SRTP_MANDATORY);
-        mediaConfig.setSrtpSecureSignaling(0); // Don't require TLS for SRTP
-        Log.d(TAG, "SRTP set to mandatory");
+        mediaConfig.setSrtpUse(pjmedia_srtp_use.PJMEDIA_SRTP_DISABLED);
+        mediaConfig.setSrtpSecureSignaling(0);
+        Log.d(TAG, "SRTP disabled (plain UDP mode)");
 
         // Create account with callback service
         // The callbackService should be PjsipSipService which handles callbacks

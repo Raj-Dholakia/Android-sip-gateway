@@ -43,6 +43,25 @@ public class GsmAudioNative {
     public static native void close();
 
     /**
+     * Pre-open ONLY the capture device (before call starts, to beat HAL).
+     */
+    public static native boolean openCapture(int card, int captureDevice,
+                                              int sampleRate, int channels, int bits,
+                                              int periodSize, int periodCount);
+
+    /**
+     * Open ONLY the playback device (when call starts).
+     */
+    public static native boolean openPlayback(int card, int playbackDevice,
+                                               int sampleRate, int channels, int bits,
+                                               int periodSize, int periodCount);
+
+    /**
+     * Close ONLY the playback device (keep capture open for next call).
+     */
+    public static native void closePlayback();
+
+    /**
      * Read audio frame from capture device (GSM -> SIP direction).
      *
      * @param buffer Byte array to fill with PCM data

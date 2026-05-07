@@ -2,6 +2,9 @@ package org.onetwoone.gateway;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.util.Log;
 
 import org.pjsip.pjsua2.*;
@@ -15,7 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Custom AudioMediaPort for bridging GSM call audio to SIP.
- * Uses native tinyalsa for direct ALSA access - no tinycap/tinyplay processes.
+ * 
+ * HYBRID APPROACH:
+ * - Capture (GSM→SIP): Android AudioRecord with VOICE_DOWNLINK source
+ *   (reads through the HAL, which owns the PCM device exclusively on Android 16+)
+ * - Playback (SIP→GSM): Native tinyalsa pcm_write() via Incall_Music mixer route
+ *   (this path works fine - HAL doesn't lock playback MultiMedia2)
  *
  * All device parameters are configurable via SharedPreferences.
  */
@@ -32,20 +40,31 @@ public class GsmAudioPort extends AudioMediaPort {
     private static final int PERIOD_SIZE = 160;  // samples per period (20ms @ 8kHz)
     private static final int PERIOD_COUNT = 4;
 
+    // AudioRecord audio sources to try for voice call capture
+    // VOICE_DOWNLINK = 3, VOICE_CALL = 4, VOICE_UPLINK = 2
+    private static final int AUDIO_SOURCE_VOICE_DOWNLINK = 3;
+    private static final int AUDIO_SOURCE_VOICE_CALL = 4;
+    private static final int AUDIO_SOURCE_VOICE_UPLINK = 2;
+
     // Configurable device parameters (loaded from SharedPreferences)
     private int card = 0;
-    private int captureDevice = 0;      // PCM device for VOC_REC capture
+    private int captureDevice = 0;      // PCM device for VOC_REC capture (used by tinyalsa fallback)
     private int playbackDevice = 0;     // PCM device for Incall_Music playback
-    private String multimediaRoute = "MultiMedia1";  // Mixer route name
+    private String multimediaRoute = "MultiMedia1";  // Mixer route name (capture/VOC_REC)
+    private String playbackRoute = "";  // Separate playback route (empty = same as multimediaRoute)
 
     // Microphone mute controls (device-specific) - can mute multiple DECs
-    private List<String> micMuteControls = new ArrayList<>();  // e.g., ["DEC1 MUX", "DEC2 MUX"]
-    private Map<String, Integer> micOriginalValues = new HashMap<>();  // Store original INT values for restore
-    private Map<String, String> micOriginalEnumValues = new HashMap<>();  // Store original ENUM values for MUX restore
+    private List<String> micMuteControls = new ArrayList<>();
+    private Map<String, Integer> micOriginalValues = new HashMap<>();
+    private Map<String, String> micOriginalEnumValues = new HashMap<>();
 
     private Context context;
     private AtomicBoolean isCapturing = new AtomicBoolean(false);
     private AtomicBoolean isPortCreated = new AtomicBoolean(false);
+
+    // AudioRecord for capture (GSM→SIP)
+    private AudioRecord audioRecord;
+    private boolean captureViaAudioRecord = false;
 
     // Native read/write buffers (reused to avoid allocation)
     private byte[] captureBuffer;
@@ -74,8 +93,16 @@ public class GsmAudioPort extends AudioMediaPort {
         captureDevice = prefs.getInt("capture_device", 0);
         playbackDevice = prefs.getInt("playback_device", 0);
         multimediaRoute = prefs.getString("multimedia_route", "MultiMedia1");
+        playbackRoute = prefs.getString("playback_route", "");
+        if (playbackRoute.isEmpty()) {
+            if (captureDevice != playbackDevice) {
+                playbackRoute = "MultiMedia" + (playbackDevice + 1);
+                Log.i(TAG, "Auto-derived playback route: " + playbackRoute + " (device " + playbackDevice + ")");
+            } else {
+                playbackRoute = multimediaRoute;
+            }
+        }
 
-        // Load DEC mute controls (comma-separated list)
         String decList = prefs.getString("mic_mute_decs", "");
         micMuteControls.clear();
         if (!decList.isEmpty()) {
@@ -85,7 +112,8 @@ public class GsmAudioPort extends AudioMediaPort {
         }
 
         Log.i(TAG, "Config loaded: card=" + card + ", capture=" + captureDevice +
-              ", playback=" + playbackDevice + ", route=" + multimediaRoute +
+              ", playback=" + playbackDevice + ", captureRoute=" + multimediaRoute +
+              ", playbackRoute=" + playbackRoute +
               ", micMuteDECs=" + micMuteControls);
     }
 
@@ -113,7 +141,7 @@ public class GsmAudioPort extends AudioMediaPort {
      * Initialize native audio
      */
     public boolean initialize() {
-        Log.d(TAG, "Initializing GsmAudioPort (native mode)...");
+        Log.d(TAG, "Initializing GsmAudioPort (hybrid mode: AudioRecord capture + tinyalsa playback)...");
 
         // Setup ALSA permissions (requires root)
         if (!RootHelper.setupAlsaPermissions()) {
@@ -155,7 +183,113 @@ public class GsmAudioPort extends AudioMediaPort {
     }
 
     /**
+     * Try to create AudioRecord with a given audio source.
+     * Returns the AudioRecord if successful, null otherwise.
+     */
+    private AudioRecord tryCreateAudioRecord(int audioSource, String sourceName) {
+        try {
+            int minBufSize = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            );
+            if (minBufSize == AudioRecord.ERROR || minBufSize == AudioRecord.ERROR_BAD_VALUE) {
+                Log.w(TAG, "AudioRecord.getMinBufferSize failed for " + sourceName);
+                return null;
+            }
+
+            // Use at least 4x frame size for buffer
+            int bufferSize = Math.max(minBufSize, FRAME_SIZE * 4);
+
+            AudioRecord record = new AudioRecord(
+                audioSource,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            );
+
+            if (record.getState() == AudioRecord.STATE_INITIALIZED) {
+                Log.i(TAG, "AudioRecord created with source " + sourceName + " (" + audioSource + "), bufSize=" + bufferSize);
+                return record;
+            } else {
+                Log.w(TAG, "AudioRecord failed to initialize with source " + sourceName);
+                record.release();
+                return null;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "AudioRecord creation failed for " + sourceName + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Start AudioRecord capture for GSM→SIP direction.
+     * Tries VOICE_DOWNLINK first, then VOICE_CALL, then VOICE_UPLINK.
+     */
+    private boolean startAudioRecordCapture() {
+        Log.i(TAG, "Starting AudioRecord capture (hybrid mode)...");
+
+        // Try VOICE_DOWNLINK first (captures far-end voice only)
+        audioRecord = tryCreateAudioRecord(AUDIO_SOURCE_VOICE_DOWNLINK, "VOICE_DOWNLINK");
+
+        // Fallback to VOICE_CALL (captures both directions)
+        if (audioRecord == null) {
+            audioRecord = tryCreateAudioRecord(AUDIO_SOURCE_VOICE_CALL, "VOICE_CALL");
+        }
+
+        // Fallback to VOICE_UPLINK (captures local mic - not ideal but might work)
+        if (audioRecord == null) {
+            audioRecord = tryCreateAudioRecord(AUDIO_SOURCE_VOICE_UPLINK, "VOICE_UPLINK");
+        }
+
+        if (audioRecord == null) {
+            Log.e(TAG, "All AudioRecord sources failed! Cannot capture voice call audio.");
+            return false;
+        }
+
+        try {
+            audioRecord.startRecording();
+            if (audioRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                captureViaAudioRecord = true;
+                Log.i(TAG, "AudioRecord capture STARTED successfully");
+                return true;
+            } else {
+                Log.e(TAG, "AudioRecord.startRecording() did not start recording");
+                audioRecord.release();
+                audioRecord = null;
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "AudioRecord.startRecording() failed: " + e.getMessage());
+            if (audioRecord != null) {
+                audioRecord.release();
+                audioRecord = null;
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Stop AudioRecord capture
+     */
+    private void stopAudioRecordCapture() {
+        if (audioRecord != null) {
+            try {
+                audioRecord.stop();
+            } catch (Exception e) {
+                Log.w(TAG, "AudioRecord.stop() error: " + e.getMessage());
+            }
+            audioRecord.release();
+            audioRecord = null;
+            captureViaAudioRecord = false;
+            Log.i(TAG, "AudioRecord capture stopped");
+        }
+    }
+
+    /**
      * PJSIP callback: Need audio to SEND to SIP peer (GSM → SIP direction)
+     * Reads from AudioRecord (hybrid mode)
      */
     @Override
     public void onFrameRequested(MediaFrame frame) {
@@ -165,8 +299,24 @@ public class GsmAudioPort extends AudioMediaPort {
             ByteVector buf = frame.getBuf();
             buf.clear();
 
-            if (isCapturing.get() && GsmAudioNative.isOpen()) {
-                // Read from native ALSA
+            if (isCapturing.get() && captureViaAudioRecord && audioRecord != null) {
+                // Read from AudioRecord (through Android HAL)
+                int bytesRead = audioRecord.read(captureBuffer, 0, FRAME_SIZE);
+
+                if (bytesRead == FRAME_SIZE) {
+                    for (byte b : captureBuffer) {
+                        buf.add((short) (b & 0xFF));
+                    }
+                    frame.setSize(FRAME_SIZE);
+                    frame.setType(pjmedia_frame_type.PJMEDIA_FRAME_TYPE_AUDIO);
+                } else {
+                    captureErrors++;
+                    for (int i = 0; i < FRAME_SIZE; i++) buf.add((short) 0);
+                    frame.setSize(FRAME_SIZE);
+                    frame.setType(pjmedia_frame_type.PJMEDIA_FRAME_TYPE_NONE);
+                }
+            } else if (isCapturing.get() && GsmAudioNative.isOpen()) {
+                // Fallback: read from native tinyalsa (if capture PCM was opened)
                 int bytesRead = GsmAudioNative.readFrame(captureBuffer);
 
                 if (bytesRead == FRAME_SIZE) {
@@ -177,7 +327,6 @@ public class GsmAudioPort extends AudioMediaPort {
                     frame.setType(pjmedia_frame_type.PJMEDIA_FRAME_TYPE_AUDIO);
                 } else {
                     captureErrors++;
-                    // Send silence on error
                     for (int i = 0; i < FRAME_SIZE; i++) buf.add((short) 0);
                     frame.setSize(FRAME_SIZE);
                     frame.setType(pjmedia_frame_type.PJMEDIA_FRAME_TYPE_NONE);
@@ -191,7 +340,8 @@ public class GsmAudioPort extends AudioMediaPort {
 
             // Log every 500 frames (~10 seconds)
             if (framesRequested % 500 == 0) {
-                Log.d(TAG, "onFrameRequested: " + framesRequested + " frames, errors=" + captureErrors);
+                Log.d(TAG, "onFrameRequested: " + framesRequested + " frames, errors=" + captureErrors +
+                      ", captureMode=" + (captureViaAudioRecord ? "AudioRecord" : "tinyalsa"));
             }
         } catch (Exception e) {
             Log.e(TAG, "Error in onFrameRequested: " + e.getMessage());
@@ -200,6 +350,7 @@ public class GsmAudioPort extends AudioMediaPort {
 
     /**
      * PJSIP callback: RECEIVED audio from SIP peer (SIP → GSM direction)
+     * Writes via native tinyalsa (unchanged)
      */
     @Override
     public void onFrameReceived(MediaFrame frame) {
@@ -214,19 +365,16 @@ public class GsmAudioPort extends AudioMediaPort {
             long size = frame.getSize();
 
             if (buf != null && size > 0 && size <= FRAME_SIZE) {
-                // Convert ByteVector to byte[]
                 for (int i = 0; i < size; i++) {
                     playbackBuffer[i] = (byte) (buf.get(i) & 0xFF);
                 }
 
-                // Write to native ALSA
                 int bytesWritten = GsmAudioNative.writeFrame(playbackBuffer);
                 if (bytesWritten < 0) {
                     playbackErrors++;
                 }
             }
 
-            // Log every 500 frames (~10 seconds)
             if (framesReceived % 500 == 0) {
                 Log.d(TAG, "onFrameReceived: " + framesReceived + " frames, errors=" + playbackErrors);
             }
@@ -237,6 +385,8 @@ public class GsmAudioPort extends AudioMediaPort {
 
     /**
      * Start audio capture/playback (when GSM call becomes active)
+     * 
+     * HYBRID: Opens AudioRecord for capture + tinyalsa for playback only
      */
     public void startCapture() {
         if (isCapturing.get()) {
@@ -244,46 +394,65 @@ public class GsmAudioPort extends AudioMediaPort {
             return;
         }
 
-        Log.d(TAG, "Starting native audio...");
+        Log.d(TAG, "Starting HYBRID audio (AudioRecord capture + tinyalsa playback)...");
 
-        // Setup mixer controls
+        // Setup mixer controls for playback (Incall_Music)
         boolean mixerOk = setupMixer();
         if (!mixerOk) {
             Log.w(TAG, "Mixer setup failed, audio may not work");
         }
 
-        // Open native audio devices
-        boolean opened = GsmAudioNative.open(
-            card, captureDevice, playbackDevice,
+        // Open tinyalsa for PLAYBACK ONLY (using openPlayback)
+        boolean playbackOpened = GsmAudioNative.openPlayback(
+            card, playbackDevice,
             SAMPLE_RATE, CHANNELS, BITS,
             PERIOD_SIZE, PERIOD_COUNT
         );
 
-        if (!opened) {
-            Log.e(TAG, "Failed to open native audio devices!");
-            Log.e(TAG, "Check: 1) Root access 2) Device permissions 3) Correct device numbers");
-            return;
+        if (!playbackOpened) {
+            Log.e(TAG, "Failed to open tinyalsa playback device " + playbackDevice + "!");
+            // Try the full open (which now handles capture failure gracefully)
+            playbackOpened = GsmAudioNative.open(
+                card, captureDevice, playbackDevice,
+                SAMPLE_RATE, CHANNELS, BITS,
+                PERIOD_SIZE, PERIOD_COUNT
+            );
+            if (!playbackOpened) {
+                Log.e(TAG, "Failed to open ANY playback device!");
+            }
+        } else {
+            Log.i(TAG, "Tinyalsa playback opened on device " + playbackDevice);
+        }
+
+        // Start AudioRecord capture (through Android HAL)
+        boolean captureStarted = startAudioRecordCapture();
+        if (!captureStarted) {
+            Log.w(TAG, "AudioRecord capture failed - GSM→SIP will be silent");
         }
 
         isCapturing.set(true);
-        Log.d(TAG, "Native audio started");
+        Log.d(TAG, "Hybrid audio started: capture=" + (captureStarted ? "AudioRecord" : "FAILED") +
+              ", playback=" + (playbackOpened ? "tinyalsa" : "FAILED"));
     }
 
     /**
      * Stop audio capture/playback
      */
     public void stopCapture() {
-        Log.d(TAG, "Stopping native audio...");
+        Log.d(TAG, "Stopping hybrid audio...");
 
         isCapturing.set(false);
 
-        // Close native audio
-        GsmAudioNative.close();
+        // Stop AudioRecord capture
+        stopAudioRecordCapture();
+
+        // Close tinyalsa playback
+        GsmAudioNative.closePlayback();
 
         // Teardown mixer
         teardownMixer();
 
-        Log.d(TAG, "Native audio stopped. Stats: requested=" + framesRequested +
+        Log.d(TAG, "Hybrid audio stopped. Stats: requested=" + framesRequested +
               ", received=" + framesReceived +
               ", captureErr=" + captureErrors + ", playbackErr=" + playbackErrors);
 
@@ -309,37 +478,31 @@ public class GsmAudioPort extends AudioMediaPort {
 
         boolean ok = true;
 
-        // Enable VOC_REC capture (DL only - UL would capture Incall_Music and cause echo!)
+        // Enable VOC_REC capture route (still needed even with AudioRecord on some devices)
         ok &= GsmAudioNative.setMixerControl(card, multimediaRoute + " Mixer VOC_REC_DL", 1);
-        // VOC_REC_UL disabled - it captures uplink including Incall_Music, causing echo
 
-        // Enable Incall_Music playback for BOTH SIM slots
-        // SIM1 uses Incall_Music, SIM2 uses Incall_Music_2
-        ok &= GsmAudioNative.setMixerControl(card, "Incall_Music Audio Mixer " + multimediaRoute, 1);
-        GsmAudioNative.setMixerControl(card, "Incall_Music_2 Audio Mixer " + multimediaRoute, 1);
+        // Enable Incall_Music playback on PLAYBACK route
+        ok &= GsmAudioNative.setMixerControl(card, "Incall_Music Audio Mixer " + playbackRoute, 1);
+        GsmAudioNative.setMixerControl(card, "Incall_Music_2 Audio Mixer " + playbackRoute, 1);
 
-        // Mute ALL configured controls (microphone DECs + speaker EAR_S/SPK)
-        // Different devices use different DECs, so we mute ALL of them
-        // Types: Volume controls (INT), MUX controls (ENUM), Speaker controls (ENUM)
+        Log.d(TAG, "Mixer routes: capture=" + multimediaRoute + " Mixer VOC_REC_DL, playback=Incall_Music Audio Mixer " + playbackRoute);
+
+        // Mute configured controls
         if (!micMuteControls.isEmpty()) {
             micOriginalValues.clear();
             micOriginalEnumValues.clear();
             for (String decControl : micMuteControls) {
-                // Check control type by name
                 if (decControl.contains(" Volume")) {
-                    // INT control - set to 0
                     int originalValue = readMixerControlValue(decControl);
                     micOriginalValues.put(decControl, originalValue);
                     GsmAudioNative.setMixerControl(card, decControl, 0);
                     Log.d(TAG, "Muted: " + decControl + " = 0 (original=" + originalValue + ")");
                 } else if (decControl.contains(" MUX")) {
-                    // ENUM MUX control - set to "ZERO"
                     String originalValue = readMixerControlEnum(decControl);
                     micOriginalEnumValues.put(decControl, originalValue);
                     GsmAudioNative.setMixerControlEnum(card, decControl, "ZERO");
                     Log.d(TAG, "Muted: " + decControl + " = ZERO (original=" + originalValue + ")");
                 } else if (decControl.equals("EAR_S") || decControl.equals("SPK")) {
-                    // Speaker/Earpiece ENUM control - set to "ZERO"
                     String originalValue = readMixerControlEnum(decControl);
                     micOriginalEnumValues.put(decControl, originalValue);
                     GsmAudioNative.setMixerControlEnum(card, decControl, "ZERO");
@@ -361,21 +524,18 @@ public class GsmAudioPort extends AudioMediaPort {
         Log.d(TAG, "Tearing down mixer...");
 
         GsmAudioNative.setMixerControl(card, multimediaRoute + " Mixer VOC_REC_DL", 0);
-        // VOC_REC_UL not used (causes echo)
-        GsmAudioNative.setMixerControl(card, "Incall_Music Audio Mixer " + multimediaRoute, 0);
-        GsmAudioNative.setMixerControl(card, "Incall_Music_2 Audio Mixer " + multimediaRoute, 0);
+        GsmAudioNative.setMixerControl(card, "Incall_Music Audio Mixer " + playbackRoute, 0);
+        GsmAudioNative.setMixerControl(card, "Incall_Music_2 Audio Mixer " + playbackRoute, 0);
 
-        // Restore ALL muted controls (Volume, MUX, and Speaker)
+        // Restore ALL muted controls
         for (String decControl : micMuteControls) {
             if (decControl.contains(" Volume")) {
-                // Restore Volume control
                 Integer originalValue = micOriginalValues.get(decControl);
                 if (originalValue != null) {
                     GsmAudioNative.setMixerControl(card, decControl, originalValue);
                     Log.d(TAG, "Restored: " + decControl + " = " + originalValue);
                 }
             } else if (decControl.contains(" MUX") || decControl.equals("EAR_S") || decControl.equals("SPK")) {
-                // Restore MUX or Speaker ENUM control
                 String originalValue = micOriginalEnumValues.get(decControl);
                 if (originalValue != null && !originalValue.isEmpty()) {
                     GsmAudioNative.setMixerControlEnum(card, decControl, originalValue);
@@ -387,13 +547,8 @@ public class GsmAudioPort extends AudioMediaPort {
         micOriginalEnumValues.clear();
     }
 
-    /**
-     * Read current mixer control value via tinymix.
-     * Returns -1 if failed to read.
-     */
     private int readMixerControlValue(String controlName) {
         try {
-            // Use tinymix to get current value
             Process p = Runtime.getRuntime().exec(new String[]{
                 "su", "-c", "tinymix -D " + card + " get \"" + controlName + "\""
             });
@@ -403,7 +558,6 @@ public class GsmAudioPort extends AudioMediaPort {
             p.waitFor();
 
             if (line != null) {
-                // Parse "84" or "84 (range 0->124)" format
                 String[] parts = line.trim().split("\\s+");
                 if (parts.length > 0) {
                     return Integer.parseInt(parts[0]);
@@ -412,17 +566,12 @@ public class GsmAudioPort extends AudioMediaPort {
         } catch (Exception e) {
             Log.e(TAG, "Failed to read mixer control " + controlName + ": " + e.getMessage());
         }
-        return 84;  // Default fallback value
+        return 84;
     }
 
-    /**
-     * Read current mixer control ENUM value via tinymix.
-     * Returns empty string if failed to read.
-     */
     private String readMixerControlEnum(String controlName) {
         try {
             File tinymixFile = new File(context.getFilesDir(), "tinymix");
-            // Use tinymix to get current ENUM value
             Process p = Runtime.getRuntime().exec(new String[]{
                 tinymixFile.getAbsolutePath(), "-D", String.valueOf(card), "get", controlName
             });
@@ -432,13 +581,12 @@ public class GsmAudioPort extends AudioMediaPort {
             p.waitFor();
 
             if (line != null) {
-                // Parse "ZERO" or "ADC1" etc.
                 return line.trim();
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to read mixer control ENUM " + controlName + ": " + e.getMessage());
         }
-        return "";  // Default fallback
+        return "";
     }
 
 }

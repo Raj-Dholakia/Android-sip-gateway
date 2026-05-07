@@ -109,21 +109,7 @@ Java_org_onetwoone_gateway_GsmAudioNative_open(
     config.stop_threshold = 0;
     config.silence_threshold = 0;
 
-    /* Open capture device */
-    g_ctx->capture_pcm = pcm_open(card, captureDevice, PCM_IN, &config);
-    if (!g_ctx->capture_pcm || !pcm_is_ready(g_ctx->capture_pcm)) {
-        LOGE("Failed to open capture PCM %d:%d - %s",
-             card, captureDevice,
-             g_ctx->capture_pcm ? pcm_get_error(g_ctx->capture_pcm) : "null");
-        if (g_ctx->capture_pcm) {
-            pcm_close(g_ctx->capture_pcm);
-            g_ctx->capture_pcm = NULL;
-        }
-        return JNI_FALSE;
-    }
-    LOGI("Capture PCM opened: %d:%d", card, captureDevice);
-
-    /* Open playback device */
+    /* Open playback device FIRST (this always works) */
     g_ctx->playback_pcm = pcm_open(card, playbackDevice, PCM_OUT, &config);
     if (!g_ctx->playback_pcm || !pcm_is_ready(g_ctx->playback_pcm)) {
         LOGE("Failed to open playback PCM %d:%d - %s",
@@ -133,11 +119,24 @@ Java_org_onetwoone_gateway_GsmAudioNative_open(
             pcm_close(g_ctx->playback_pcm);
             g_ctx->playback_pcm = NULL;
         }
-        pcm_close(g_ctx->capture_pcm);
-        g_ctx->capture_pcm = NULL;
         return JNI_FALSE;
     }
     LOGI("Playback PCM opened: %d:%d", card, playbackDevice);
+
+    /* Open capture device (non-fatal if it fails — playback still works) */
+    g_ctx->capture_pcm = pcm_open(card, captureDevice, PCM_IN, &config);
+    if (!g_ctx->capture_pcm || !pcm_is_ready(g_ctx->capture_pcm)) {
+        LOGE("WARNING: Failed to open capture PCM %d:%d - %s (playback still active)",
+             card, captureDevice,
+             g_ctx->capture_pcm ? pcm_get_error(g_ctx->capture_pcm) : "null");
+        if (g_ctx->capture_pcm) {
+            pcm_close(g_ctx->capture_pcm);
+            g_ctx->capture_pcm = NULL;
+        }
+        /* DON'T return false — playback is open and working */
+    } else {
+        LOGI("Capture PCM opened: %d:%d", card, captureDevice);
+    }
 
     /* Open mixer */
     g_ctx->mixer = mixer_open(card);
@@ -150,6 +149,138 @@ Java_org_onetwoone_gateway_GsmAudioNative_open(
 
     g_ctx->is_open = 1;
     return JNI_TRUE;
+}
+
+/*
+ * Open ONLY the capture device (pre-open before call to beat HAL)
+ */
+JNIEXPORT jboolean JNICALL
+Java_org_onetwoone_gateway_GsmAudioNative_openCapture(
+        JNIEnv *env, jclass clazz,
+        jint card, jint captureDevice,
+        jint sampleRate, jint channels, jint bits,
+        jint periodSize, jint periodCount) {
+
+    LOGI("Pre-opening capture: card=%d, device=%d, rate=%d", card, captureDevice, sampleRate);
+
+    /* Allocate context if needed */
+    if (g_ctx == NULL) {
+        g_ctx = (struct gsm_audio_ctx *)calloc(1, sizeof(struct gsm_audio_ctx));
+        if (!g_ctx) {
+            LOGE("Failed to allocate context");
+            return JNI_FALSE;
+        }
+        pthread_mutex_init(&g_ctx->lock, NULL);
+    }
+
+    if (g_ctx->capture_pcm) {
+        LOGI("Capture already open, skipping");
+        return JNI_TRUE;
+    }
+
+    g_ctx->card = card;
+    g_ctx->capture_device = captureDevice;
+    g_ctx->sample_rate = sampleRate;
+    g_ctx->channels = channels;
+    g_ctx->bits = bits;
+    g_ctx->period_size = periodSize;
+    g_ctx->period_count = periodCount;
+
+    struct pcm_config config;
+    memset(&config, 0, sizeof(config));
+    config.channels = channels;
+    config.rate = sampleRate;
+    config.period_size = periodSize;
+    config.period_count = periodCount;
+    config.format = bits_to_format(bits);
+    config.start_threshold = 0;
+    config.stop_threshold = 0;
+    config.silence_threshold = 0;
+
+    g_ctx->capture_pcm = pcm_open(card, captureDevice, PCM_IN, &config);
+    if (!g_ctx->capture_pcm || !pcm_is_ready(g_ctx->capture_pcm)) {
+        LOGE("Failed to pre-open capture PCM %d:%d - %s",
+             card, captureDevice,
+             g_ctx->capture_pcm ? pcm_get_error(g_ctx->capture_pcm) : "null");
+        if (g_ctx->capture_pcm) {
+            pcm_close(g_ctx->capture_pcm);
+            g_ctx->capture_pcm = NULL;
+        }
+        return JNI_FALSE;
+    }
+    LOGI("Capture PCM pre-opened: %d:%d", card, captureDevice);
+    return JNI_TRUE;
+}
+
+/*
+ * Open ONLY the playback device (called when call starts)
+ */
+JNIEXPORT jboolean JNICALL
+Java_org_onetwoone_gateway_GsmAudioNative_openPlayback(
+        JNIEnv *env, jclass clazz,
+        jint card, jint playbackDevice,
+        jint sampleRate, jint channels, jint bits,
+        jint periodSize, jint periodCount) {
+
+    LOGI("Opening playback: card=%d, device=%d, rate=%d", card, playbackDevice, sampleRate);
+
+    if (g_ctx == NULL) {
+        LOGE("Context not initialized - call openCapture first");
+        return JNI_FALSE;
+    }
+
+    if (g_ctx->playback_pcm) {
+        LOGI("Playback already open, skipping");
+        return JNI_TRUE;
+    }
+
+    g_ctx->playback_device = playbackDevice;
+
+    struct pcm_config config;
+    memset(&config, 0, sizeof(config));
+    config.channels = channels;
+    config.rate = sampleRate;
+    config.period_size = periodSize;
+    config.period_count = periodCount;
+    config.format = bits_to_format(bits);
+    config.start_threshold = 0;
+    config.stop_threshold = 0;
+    config.silence_threshold = 0;
+
+    g_ctx->playback_pcm = pcm_open(card, playbackDevice, PCM_OUT, &config);
+    if (!g_ctx->playback_pcm || !pcm_is_ready(g_ctx->playback_pcm)) {
+        LOGE("Failed to open playback PCM %d:%d - %s",
+             card, playbackDevice,
+             g_ctx->playback_pcm ? pcm_get_error(g_ctx->playback_pcm) : "null");
+        if (g_ctx->playback_pcm) {
+            pcm_close(g_ctx->playback_pcm);
+            g_ctx->playback_pcm = NULL;
+        }
+        return JNI_FALSE;
+    }
+    LOGI("Playback PCM opened: %d:%d", card, playbackDevice);
+
+    g_ctx->is_open = 1;
+    return JNI_TRUE;
+}
+
+/*
+ * Close ONLY the playback device (keep capture open for next call)
+ */
+JNIEXPORT void JNICALL
+Java_org_onetwoone_gateway_GsmAudioNative_closePlayback(JNIEnv *env, jclass clazz) {
+    LOGI("Closing playback only");
+    if (g_ctx == NULL) return;
+
+    pthread_mutex_lock(&g_ctx->lock);
+    if (g_ctx->playback_pcm) {
+        pcm_close(g_ctx->playback_pcm);
+        g_ctx->playback_pcm = NULL;
+    }
+    /* is_open stays true if capture is still open */
+    g_ctx->is_open = (g_ctx->capture_pcm != NULL) ? 1 : 0;
+    pthread_mutex_unlock(&g_ctx->lock);
+    LOGI("Playback closed, capture still %s", g_ctx->capture_pcm ? "open" : "closed");
 }
 
 /*

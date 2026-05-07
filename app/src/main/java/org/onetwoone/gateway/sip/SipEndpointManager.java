@@ -266,10 +266,11 @@ public class SipEndpointManager {
             endpoint.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_TLS, transportConfig);
             Log.d(TAG, "Created TLS transport");
         } else {
-            // UDP transport
-            transportConfig.setPort(5060);
+            // UDP transport - use port 0 for random ephemeral port
+            // Avoids conflict when both client and server use 5060
+            transportConfig.setPort(0);
             endpoint.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_UDP, transportConfig);
-            Log.d(TAG, "Created UDP transport");
+            Log.d(TAG, "Created UDP transport (ephemeral port)");
         }
     }
 
