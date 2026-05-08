@@ -52,9 +52,9 @@ public class GsmAudioPort extends AudioMediaPort {
 
     // Configurable device parameters (loaded from SharedPreferences)
     private int card = 0;
-    private int captureDevice = 0;      // PCM device for VOC_REC capture
-    private int playbackDevice = 1;     // PCM device for Incall_Music playback (default: MM2)
-    private String captureRoute = "MultiMedia1";   // Mixer route for capture (VOC_REC)
+    private int captureDevice = 8;      // PCM device 8 = MultiMedia9 (VOC_REC capable, HAL doesn't claim it)
+    private int playbackDevice = 1;     // PCM device 1 = MultiMedia2 (Incall_Music capable)
+    private String captureRoute = "MultiMedia9";   // Mixer route for capture (VOC_REC)
     private String playbackRoute = "MultiMedia2";  // Mixer route for playback (Incall_Music)
 
     // Capture mode: which VOC_REC to enable
@@ -96,15 +96,15 @@ public class GsmAudioPort extends AudioMediaPort {
     private void loadConfig() {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         card = prefs.getInt("card", 0);
-        captureDevice = prefs.getInt("capture_device", 0);
+        captureDevice = prefs.getInt("capture_device", 8);
         playbackDevice = prefs.getInt("playback_device", 1);
-        captureRoute = prefs.getString("capture_route", "MultiMedia1");
+        captureRoute = prefs.getString("capture_route", "MultiMedia9");
         playbackRoute = prefs.getString("playback_route", "MultiMedia2");
         vocRecMode = prefs.getString("voc_rec_mode", "UL");
 
-        // Backward compat: read old keys
+        // Backward compat: read old keys, but prefer new defaults
         if (prefs.contains("multimedia_route") && !prefs.contains("capture_route")) {
-            captureRoute = prefs.getString("multimedia_route", "MultiMedia1");
+            captureRoute = prefs.getString("multimedia_route", "MultiMedia9");
         }
 
         String decList = prefs.getString("mic_mute_decs", "");
@@ -317,30 +317,42 @@ public class GsmAudioPort extends AudioMediaPort {
         try { Thread.sleep(100); } catch (InterruptedException ignored) {}
 
         // Step 3: Open tinyalsa for BOTH capture and playback
-        boolean opened = GsmAudioNative.open(
-            card, captureDevice, playbackDevice,
+        // Open capture and playback separately for better error reporting
+        // Capture first (this is the one that might fail if HAL locks the device)
+        boolean captureOk = GsmAudioNative.openCapture(
+            card, captureDevice,
             SAMPLE_RATE, CHANNELS, BITS,
             PERIOD_SIZE, PERIOD_COUNT
         );
 
-        if (!opened) {
-            Log.e(TAG, "Failed to open tinyalsa devices (capture=" + captureDevice +
-                  ", playback=" + playbackDevice + ")");
-
-            // Fallback: try playback only (capture PCM might be locked by HAL)
-            boolean playbackOnly = GsmAudioNative.openPlayback(
-                card, playbackDevice,
-                SAMPLE_RATE, CHANNELS, BITS,
-                PERIOD_SIZE, PERIOD_COUNT
-            );
-            if (playbackOnly) {
-                Log.w(TAG, "Playback opened but capture failed — GSM→SIP will be silent");
-                Log.w(TAG, "Capture PCM device " + captureDevice + " may be locked by Android HAL");
-            } else {
-                Log.e(TAG, "BOTH capture and playback failed to open!");
-            }
+        if (!captureOk) {
+            Log.e(TAG, "CAPTURE FAILED: PCM device " + captureDevice +
+                  " (" + captureRoute + ") — locked by HAL or wrong device number");
+            Log.e(TAG, "Try a different capture device: 3(MM4), 7(MM8), or 8(MM9)");
         } else {
-            Log.i(TAG, "Tinyalsa BOTH capture and playback opened successfully");
+            Log.i(TAG, "✓ Capture PCM opened: device " + captureDevice + " (" + captureRoute + ")");
+        }
+
+        // Playback
+        boolean playbackOk = GsmAudioNative.openPlayback(
+            card, playbackDevice,
+            SAMPLE_RATE, CHANNELS, BITS,
+            PERIOD_SIZE, PERIOD_COUNT
+        );
+
+        if (!playbackOk) {
+            Log.e(TAG, "PLAYBACK FAILED: PCM device " + playbackDevice +
+                  " (" + playbackRoute + ")");
+        } else {
+            Log.i(TAG, "✓ Playback PCM opened: device " + playbackDevice + " (" + playbackRoute + ")");
+        }
+
+        if (captureOk && playbackOk) {
+            Log.i(TAG, "✓✓ BOTH capture and playback opened successfully");
+        } else if (!captureOk && playbackOk) {
+            Log.w(TAG, "⚠ Playback works but capture failed — caller won't be heard");
+        } else if (!captureOk && !playbackOk) {
+            Log.e(TAG, "✗✗ BOTH capture and playback FAILED!");
         }
 
         isCapturing.set(true);
