@@ -6,6 +6,9 @@ import android.util.Log;
 
 import org.pjsip.pjsua2.*;
 
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -60,6 +63,12 @@ public class GsmAudioPort extends AudioMediaPort {
     // Capture mode: which VOC_REC to enable
     // "UL" = uplink only (caller's voice), "DL" = downlink only, "BOTH" = both
     private String vocRecMode = "UL";
+
+    // DSP trigger: dummy AudioRecord to send VSS_IRECORD_CMD_START to the ADSP
+    // Without this, VOC_REC mixer routes are set but DSP never starts recording.
+    // We don't read from this — actual audio comes from tinyalsa PCM device.
+    private AudioRecord dspTriggerRecord = null;
+    private static final int AUDIO_SOURCE_VOICE_UPLINK = 2;
 
     // Microphone mute controls (device-specific) - can mute multiple DECs
     private List<String> micMuteControls = new ArrayList<>();
@@ -313,10 +322,16 @@ public class GsmAudioPort extends AudioMediaPort {
             Log.w(TAG, "Mixer setup failed, audio may not work");
         }
 
-        // Step 2: Small delay to let DSP stabilize after mixer route setup
-        try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+        // Step 2: Trigger DSP voice recording via dummy AudioRecord
+        // This sends VSS_IRECORD_CMD_START to the ADSP voice processor.
+        // Without it, VOC_REC mixer routes are connected but DSP never
+        // actually taps the voice call audio stream.
+        startDspTrigger();
 
-        // Step 3: Open tinyalsa for BOTH capture and playback
+        // Step 3: Small delay to let DSP stabilize
+        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+
+        // Step 4: Open tinyalsa for BOTH capture and playback
         // Open capture and playback separately for better error reporting
         // Capture first (this is the one that might fail if HAL locks the device)
         boolean captureOk = GsmAudioNative.openCapture(
@@ -368,6 +383,9 @@ public class GsmAudioPort extends AudioMediaPort {
 
         isCapturing.set(false);
 
+        // Stop DSP trigger
+        stopDspTrigger();
+
         // Close ALL tinyalsa devices
         GsmAudioNative.close();
 
@@ -392,6 +410,103 @@ public class GsmAudioPort extends AudioMediaPort {
 
     public boolean isCapturing() {
         return isCapturing.get();
+    }
+
+    // ========== DSP Trigger ==========
+
+    /**
+     * Start a dummy AudioRecord with VOICE_UPLINK source.
+     * 
+     * WHY: On Qualcomm, the voice call audio flows through the ADSP.
+     * Setting VOC_REC_UL via tinymix only connects the ALSA mixer route.
+     * The DSP won't actually start tapping the voice stream until
+     * an AudioRecord with VOICE_UPLINK/VOICE_CALL source is opened,
+     * which triggers AudioFlinger → AudioHAL → q6voice → VSS_IRECORD_CMD_START.
+     *
+     * We DON'T read audio from this AudioRecord — the data quality is poor
+     * (HAL processing, echo gate, etc). Actual audio comes from tinyalsa
+     * pcm_read() on the VOC_REC PCM device, which gets the raw digital stream.
+     *
+     * Think of it as: AudioRecord = ignition key, tinyalsa = the engine.
+     */
+    private void startDspTrigger() {
+        Log.d(TAG, "Starting DSP trigger (dummy AudioRecord VOICE_UPLINK)...");
+
+        try {
+            int minBuf = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            );
+
+            if (minBuf == AudioRecord.ERROR || minBuf == AudioRecord.ERROR_BAD_VALUE) {
+                Log.e(TAG, "DSP trigger: getMinBufferSize failed");
+                return;
+            }
+
+            // Try VOICE_UPLINK first (triggers UL recording in DSP)
+            dspTriggerRecord = new AudioRecord(
+                AUDIO_SOURCE_VOICE_UPLINK,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                Math.max(minBuf, FRAME_SIZE * 4)
+            );
+
+            if (dspTriggerRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                Log.w(TAG, "DSP trigger: VOICE_UPLINK failed to init, trying VOICE_CALL(4)...");
+                dspTriggerRecord.release();
+
+                // Fallback: VOICE_CALL source
+                dspTriggerRecord = new AudioRecord(
+                    4, // VOICE_CALL
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    Math.max(minBuf, FRAME_SIZE * 4)
+                );
+
+                if (dspTriggerRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                    Log.e(TAG, "DSP trigger: VOICE_CALL also failed — DSP may not record");
+                    dspTriggerRecord.release();
+                    dspTriggerRecord = null;
+                    return;
+                }
+            }
+
+            dspTriggerRecord.startRecording();
+
+            if (dspTriggerRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                Log.i(TAG, "✓ DSP trigger started (AudioRecord VOICE_UPLINK) — DSP should now tap voice stream");
+            } else {
+                Log.e(TAG, "DSP trigger: startRecording() didn't start");
+                dspTriggerRecord.release();
+                dspTriggerRecord = null;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "DSP trigger failed: " + e.getMessage());
+            if (dspTriggerRecord != null) {
+                try { dspTriggerRecord.release(); } catch (Exception ignored) {}
+                dspTriggerRecord = null;
+            }
+        }
+    }
+
+    /**
+     * Stop the DSP trigger AudioRecord.
+     */
+    private void stopDspTrigger() {
+        if (dspTriggerRecord != null) {
+            Log.d(TAG, "Stopping DSP trigger...");
+            try {
+                dspTriggerRecord.stop();
+            } catch (Exception e) {
+                Log.w(TAG, "DSP trigger stop error: " + e.getMessage());
+            }
+            dspTriggerRecord.release();
+            dspTriggerRecord = null;
+            Log.d(TAG, "DSP trigger stopped");
+        }
     }
 
     // ========== Mixer Controls ==========
