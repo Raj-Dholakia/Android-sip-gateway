@@ -90,9 +90,9 @@ public class MainActivity extends AppCompatActivity {
 
     // Selected values (for spinners)
     private int selectedCard = 0;
-    private int selectedCaptureDevice = 0;
+    private int selectedCaptureDevice = 27;
     private int selectedPlaybackDevice = 0;
-    private String selectedMixerRoute = "MultiMedia1";
+    private String selectedMixerRoute = "MultiMedia9";
     private boolean isRefreshing = false;
 
     @Override
@@ -314,7 +314,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         // Mixer route spinner
-        String[] routes = {"MultiMedia1", "MultiMedia2", "MultiMedia3", "MultiMedia4"};
+        String[] routes = {"MultiMedia1", "MultiMedia2", "MultiMedia3", "MultiMedia4", "MultiMedia5", "MultiMedia8", "MultiMedia9"};
         ArrayAdapter<String> routeAdapter = new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_item, routes);
         routeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -410,7 +410,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         // Route spinner selection
-        String[] routes = {"MultiMedia1", "MultiMedia2", "MultiMedia3", "MultiMedia4"};
+        String[] routes = {"MultiMedia1", "MultiMedia2", "MultiMedia3", "MultiMedia4", "MultiMedia5", "MultiMedia8", "MultiMedia9"};
         for (int i = 0; i < routes.length; i++) {
             if (routes[i].equals(selectedMixerRoute)) {
                 mixerRouteSpinner.setSelection(i);

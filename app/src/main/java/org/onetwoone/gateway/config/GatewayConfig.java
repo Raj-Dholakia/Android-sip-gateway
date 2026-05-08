@@ -47,7 +47,7 @@ public class GatewayConfig {
 
     // ========== Default audio values ==========
     private static final int DEFAULT_AUDIO_CARD = 0;
-    private static final String DEFAULT_MULTIMEDIA_ROUTE = "MultiMedia1";
+    private static final String DEFAULT_MULTIMEDIA_ROUTE = "MultiMedia9";
     private static final String DEFAULT_MUTE_PRESET = "redmi_note_7";
 
     // ========== Preference keys ==========

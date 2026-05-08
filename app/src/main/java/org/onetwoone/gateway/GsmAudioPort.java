@@ -52,7 +52,7 @@ public class GsmAudioPort extends AudioMediaPort {
 
     // Configurable device parameters (loaded from SharedPreferences)
     private int card = 0;
-    private int captureDevice = 8;      // PCM device 8 = MultiMedia9 (VOC_REC capable, HAL doesn't claim it)
+    private int captureDevice = 27;     // PCM device 27 = MultiMedia9 (VOC_REC capable, HAL doesn't claim it)
     private int playbackDevice = 1;     // PCM device 1 = MultiMedia2 (Incall_Music capable)
     private String captureRoute = "MultiMedia9";   // Mixer route for capture (VOC_REC)
     private String playbackRoute = "MultiMedia2";  // Mixer route for playback (Incall_Music)
@@ -96,7 +96,7 @@ public class GsmAudioPort extends AudioMediaPort {
     private void loadConfig() {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         card = prefs.getInt("card", 0);
-        captureDevice = prefs.getInt("capture_device", 8);
+        captureDevice = prefs.getInt("capture_device", 27);
         playbackDevice = prefs.getInt("playback_device", 1);
         captureRoute = prefs.getString("capture_route", "MultiMedia9");
         playbackRoute = prefs.getString("playback_route", "MultiMedia2");

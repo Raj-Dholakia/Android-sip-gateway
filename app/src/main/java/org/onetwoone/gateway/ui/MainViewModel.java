@@ -546,7 +546,7 @@ public class MainViewModel extends AndroidViewModel {
         public int card = 0;
         public int captureDevice = 0;
         public int playbackDevice = 0;
-        public String multimediaRoute = "MultiMedia1";
+        public String multimediaRoute = "MultiMedia9";
         public float txGain = 0.0f;  // GSM→SIP
         public float rxGain = 0.0f;  // SIP→GSM
         public Set<String> micMuteControls = new java.util.HashSet<>();
